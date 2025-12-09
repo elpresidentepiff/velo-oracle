@@ -380,6 +380,10 @@ class BayesKnnModel(BaseVeloModel):
         return ModelOutputs(win_proba, place_proba, None)
 
 
+# Backwards-compatible alias
+BayesKNNModel = BayesKnnModel
+
+
 class ClusteringEngines:
     """
     K-Means clustering for race regimes and horse types.
@@ -400,11 +404,8 @@ class ClusteringEngines:
         )
         self._fitted = False
 
-    def fit(self, race_df: pd.DataFrame, X: np.ndarray):
-        """
-        race_df should have 1 row per runner; we aggregate per race for race-clustering.
-        """
-        # Race-level aggregates: field size, fav odds, spread, etc. (user can expand)
+    def _race_agg(self, race_df: pd.DataFrame) -> pd.DataFrame:
+        """Helper to compute race-level aggregates."""
         agg = race_df.groupby("race_id").agg(
             field_size=("runner_id", "count"),
             avg_or=("or", "mean"),
@@ -412,28 +413,43 @@ class ClusteringEngines:
             avg_rpr=("last_rpr", "mean"),
             chaos_proxy=("win_odds", "std"),
         ).fillna(0.0)
-        self.kmeans_races.fit(agg.values)
+        return agg
 
-        # Horse-level clustering on ability-related features directly from X
+    def fit(self, race_df: pd.DataFrame, X: np.ndarray):
+        """
+        race_df: 1 row per runner (historical)
+        X: feature matrix aligned with df rows
+        """
+        agg = self._race_agg(race_df)
+        self.kmeans_races.fit(agg.values)
         self.kmeans_horses.fit(X)
         self._fitted = True
         return self
 
     def race_clusters(self, race_df: pd.DataFrame) -> Dict[str, int]:
         assert self._fitted
-        agg = race_df.groupby("race_id").agg(
-            field_size=("runner_id", "count"),
-            avg_or=("or", "mean"),
-            std_or=("or", "std"),
-            avg_rpr=("last_rpr", "mean"),
-            chaos_proxy=("win_odds", "std"),
-        ).fillna(0.0)
+        agg = self._race_agg(race_df)
         labels = self.kmeans_races.predict(agg.values)
         return {rid: int(lbl) for rid, lbl in zip(agg.index.astype(str), labels)}
 
     def horse_clusters(self, X: np.ndarray) -> np.ndarray:
         assert self._fitted
         return self.kmeans_horses.predict(X)
+
+    def predict_race_cluster(self, race_df: pd.DataFrame) -> int:
+        """
+        Predict cluster for a single race (race_day usage).
+        race_df: all runners for ONE race (race_id constant).
+        """
+        assert self._fitted
+        agg = self._race_agg(race_df)
+        return int(self.kmeans_races.predict(agg.values)[0])
+
+    def predict_horse_clusters(self, X: np.ndarray) -> np.ndarray:
+        """
+        Wrapper for race-day; same as horse_clusters.
+        """
+        return self.horse_clusters(X)
 
 
 # ---------------------------------------------------------------------------
@@ -461,62 +477,97 @@ class SQPEMetaBrain:
     plus clustering context and chaos logic.
     """
 
-    def __init__(self, cfg: VeloConfig, clustering: ClusteringEngines):
+    def __init__(
+        self,
+        cfg: VeloConfig,
+        clustering: ClusteringEngines,
+        baseline: Optional[BaselineGLM] = None,
+        trees: Optional[TreeEnsembleModel] = None,
+        bayes_knn: Optional[BayesKnnModel] = None,
+    ):
         self.cfg = cfg
         self.clustering = clustering
 
-        self.baseline = BaselineGLM()
-        self.trees = TreeEnsembleModel(random_state=cfg.random_state)
-        self.bayes_knn = BayesKnnModel(n_neighbors=cfg.n_knn_neighbors)
+        self.baseline = baseline or BaselineGLM()
+        self.trees = trees or TreeEnsembleModel(random_state=cfg.random_state)
+        self.bayes_knn = bayes_knn or BayesKnnModel(n_neighbors=cfg.n_knn_neighbors)
 
         # Meta calibrator (simple logistic stacker)
         self.meta_win = LogisticRegression(max_iter=1000)
         self.meta_place = LogisticRegression(max_iter=1000)
         self._meta_fitted = False
 
-    def fit(self, X: np.ndarray, y_win: np.ndarray, y_place: np.ndarray,
-            race_df: pd.DataFrame):
-        # Fit base models
-        self.baseline.fit(X, y_win, y_place)
-        self.trees.fit(X, y_win, y_place)
-        self.bayes_knn.fit(X, y_win, y_place)
+    def fit(
+        self,
+        X: np.ndarray,
+        y_win: np.ndarray,
+        y_place: np.ndarray,
+        race_df: pd.DataFrame,
+        seq_win_proba: Optional[np.ndarray] = None,
+        seq_place_proba: Optional[np.ndarray] = None,
+        intent_scalar: Optional[np.ndarray] = None,
+        refit_base: bool = True,
+    ):
+        # Optionally refit base models
+        if refit_base:
+            self.baseline.fit(X, y_win, y_place)
+            self.trees.fit(X, y_win, y_place)
+            self.bayes_knn.fit(X, y_win, y_place)
 
-        # Clustering for race & horse types
+        # Clustering
         self.clustering.fit(race_df, X)
         race_clusters = self.clustering.race_clusters(race_df)
         race_ids = race_df["race_id"].astype(str).values
         race_cluster_vec = np.array([race_clusters[rid] for rid in race_ids])
         horse_cluster_vec = self.clustering.horse_clusters(X)
 
-        # Build meta features: stack of base preds + clusters
+        # Base predictions
         b = self.baseline.predict(X)
         t = self.trees.predict(X)
         k = self.bayes_knn.predict(X)
 
-        meta_X = np.vstack([
+        # WIN meta features
+        win_feats = [
             b.win_proba,
             t.win_proba,
             k.win_proba,
-            race_cluster_vec,
-            horse_cluster_vec,
-        ]).T
+        ]
+        if seq_win_proba is not None:
+            win_feats.append(seq_win_proba)
+        if intent_scalar is not None:
+            win_feats.append(intent_scalar)
 
-        meta_X_place = np.vstack([
+        win_feats.extend([race_cluster_vec, horse_cluster_vec])
+        meta_X = np.vstack(win_feats).T
+
+        # PLACE meta features
+        place_feats = [
             b.place_proba,
             t.place_proba,
             k.place_proba,
-            race_cluster_vec,
-            horse_cluster_vec,
-        ]).T
+        ]
+        if seq_place_proba is not None:
+            place_feats.append(seq_place_proba)
+        if intent_scalar is not None:
+            place_feats.append(intent_scalar)
+
+        place_feats.extend([race_cluster_vec, horse_cluster_vec])
+        meta_X_place = np.vstack(place_feats).T
 
         self.meta_win.fit(meta_X, y_win)
         self.meta_place.fit(meta_X_place, y_place)
         self._meta_fitted = True
         return self
 
-    def predict_for_race(self, race: RaceSample,
-                         race_cluster: int,
-                         horse_clusters_for_runners: np.ndarray) -> List[SQPERunnerOutput]:
+    def predict_for_race(
+        self,
+        race: RaceSample,
+        race_cluster: int,
+        horse_clusters_for_runners: np.ndarray,
+        seq_win_proba: Optional[np.ndarray] = None,
+        seq_place_proba: Optional[np.ndarray] = None,
+        intent_scalar_for_runners: Optional[np.ndarray] = None,
+    ) -> List[SQPERunnerOutput]:
         assert self._meta_fitted, "SQPE must be fitted."
 
         X = np.vstack([r.features for r in race.runners])
@@ -525,23 +576,37 @@ class SQPEMetaBrain:
         t = self.trees.predict(X)
         k = self.bayes_knn.predict(X)
 
-        rc_vec = np.full(len(race.runners), race_cluster, dtype=float)
+        n = len(race.runners)
+        rc_vec = np.full(n, race_cluster, dtype=float)
         hc_vec = horse_clusters_for_runners.astype(float)
 
-        meta_X = np.vstack([
+        # WIN
+        win_feats = [
             b.win_proba,
             t.win_proba,
             k.win_proba,
-            rc_vec,
-            hc_vec,
-        ]).T
-        meta_X_place = np.vstack([
+        ]
+        if seq_win_proba is not None:
+            win_feats.append(seq_win_proba)
+        if intent_scalar_for_runners is not None:
+            win_feats.append(intent_scalar_for_runners)
+
+        win_feats.extend([rc_vec, hc_vec])
+        meta_X = np.vstack(win_feats).T
+
+        # PLACE
+        place_feats = [
             b.place_proba,
             t.place_proba,
             k.place_proba,
-            rc_vec,
-            hc_vec,
-        ]).T
+        ]
+        if seq_place_proba is not None:
+            place_feats.append(seq_place_proba)
+        if intent_scalar_for_runners is not None:
+            place_feats.append(intent_scalar_for_runners)
+
+        place_feats.extend([rc_vec, hc_vec])
+        meta_X_place = np.vstack(place_feats).T
 
         fused_win = self.meta_win.predict_proba(meta_X)[:, 1]
         fused_place = self.meta_place.predict_proba(meta_X_place)[:, 1]
@@ -557,7 +622,6 @@ class SQPEMetaBrain:
             }
             expected_rpr = None
             if b.expected_rpr is not None or t.expected_rpr is not None:
-                # Prefer trees if available; fall back to baseline
                 if t.expected_rpr is not None:
                     expected_rpr = float(t.expected_rpr[i])
                 elif b.expected_rpr is not None:
