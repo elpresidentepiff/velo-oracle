@@ -1,0 +1,44 @@
+doctrine_A_form_cycle:
+  peak_entry:
+    conditions:
+      - form_momentum > 0.05
+      - rpr_latest >= rpr_peak - 5
+      - form_recency < 21
+    score: 0.8
+    action: BACK
+  peak_exit:
+    conditions:
+      - form_momentum < -0.05
+      - rpr_latest <= rpr_peak - 10
+    score: 0.7
+    action: FADE
+
+doctrine_B_pace_shape:
+  late_speed_bias:
+    conditions:
+      - pace_pressure < 0.5
+      - draw_advantage >= 0
+    score: 0.6
+    action: BACK
+  meltdown_risk:
+    conditions:
+      - pace_pressure >= 0.7
+      - early_speed_rank > 2
+    score: 0.75
+    action: STAND_DOWN
+
+doctrine_C_class_weight:
+  class_relief:
+    conditions:
+      - official_rating_drop >= 3
+      - weight_carried <= 9.10
+    score: 0.65
+    action: BACK
+
+doctrine_D_favourite_tax:
+  overbet_favourite:
+    conditions:
+      - market_favourite == 1
+      - sp_implied_prob >= model_prob + 0.05
+    score: 0.7
+    action: FADE
