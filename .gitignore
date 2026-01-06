@@ -44,6 +44,7 @@ data/ledger/*
 *.db
 *.sqlite
 *.log
+logs/
 
 # Testing
 .pytest_cache/
