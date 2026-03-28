@@ -30,4 +30,4 @@ HEALTHCHECK --interval=60s --timeout=30s --start-period=40s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health')"
 
 # Run application
-CMD gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+CMD ["bash", "start.sh"]
