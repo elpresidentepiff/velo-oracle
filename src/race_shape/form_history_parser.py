@@ -211,7 +211,7 @@ class RpFormHistoryParser:
     @staticmethod
     def _extract_course(cell) -> Optional[str]:
         """Extract course name from the messy second cell."""
-        link = cell.find("a") if _BS4_AVAILABLE else None
+        link = cell.select_one('a[href*="/profile/course/"]') if _BS4_AVAILABLE else None
         if link:
             href = link.get("href", "")
             # /profile/course/394/southwell-aw → "southwell-aw" → "Southwell Aw"
@@ -229,7 +229,7 @@ class RpFormHistoryParser:
     def _extract_jockey(cell) -> tuple[Optional[str], Optional[int]]:
         if not _BS4_AVAILABLE:
             return None, None
-        link = cell.find("a")
+        link = cell.select_one('a[href*="/profile/jockey/"]')
         if link:
             href = link.get("href", "")
             uid_m = _JOCKEY_UID_RE.search(href)
