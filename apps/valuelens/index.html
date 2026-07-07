@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ValueLens MVP</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero panel">
+        <p class="eyebrow">AI value governance</p>
+        <h1>ValueLens</h1>
+        <p class="hero-copy">Turn an AI idea, business process, or codebase into a board-ready value case, risk audit, build roadmap, and outcome ledger.</p>
+        <div class="loop">Input → Forecast → Risk → Build → Ledger → Learn</div>
+      </section>
+
+      <section class="grid">
+        <form id="lens-form" class="panel form-panel">
+          <div class="field-row">
+            <label for="mode">Lens mode</label>
+            <select id="mode">
+              <option value="idea">IdeaLens: AI idea</option>
+              <option value="process">ProcessLens: business process</option>
+              <option value="code">CodeLens: codebase readiness</option>
+            </select>
+          </div>
+
+          <div class="field-row">
+            <label for="projectName">Project name</label>
+            <input id="projectName" value="Customer complaint triage assistant" />
+          </div>
+
+          <div class="field-row">
+            <label for="problem">Problem / code summary</label>
+            <textarea id="problem" rows="8">A small operations team spends too much time reading customer complaints, classifying urgency, drafting replies, and escalating edge cases. Sensitive customer data may be present, so full automation is risky. The first build should keep a human approval checkpoint.</textarea>
+          </div>
+
+          <div class="metrics">
+            <div class="field-row"><label for="people">People affected</label><input id="people" type="number" value="8" min="1" /></div>
+            <div class="field-row"><label for="hours">Hours wasted / week</label><input id="hours" type="number" value="42" min="0" /></div>
+            <div class="field-row"><label for="hourlyCost">Average hourly cost (£)</label><input id="hourlyCost" type="number" value="35" min="0" /></div>
+            <div class="field-row"><label for="complexity">Build complexity</label><select id="complexity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+            <div class="field-row"><label for="sensitivity">Data sensitivity</label><select id="sensitivity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+            <div class="field-row"><label for="evidence">Evidence quality</label><select id="evidence"><option value="weak">Weak</option><option value="partial" selected>Partial</option><option value="strong">Strong</option></select></div>
+          </div>
+
+          <button type="submit">Generate ValueLens report</button>
+        </form>
+
+        <section id="report" class="panel report-panel" aria-live="polite"></section>
+      </section>
+    </main>
+    <script src="./valuelens.js"></script>
+  </body>
+</html>
